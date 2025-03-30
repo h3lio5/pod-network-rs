@@ -43,7 +43,7 @@ impl Crypto {
         Transaction {
             id,
             content,
-            sender: self.public_key,
+            sender: self.public_key.to_bytes().to_vec(),
         }
     }
 }
