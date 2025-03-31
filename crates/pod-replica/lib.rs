@@ -1,19 +1,22 @@
-use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
-use tracing::{info, warn};
+use ed25519_dalek::VerifyingKey as PublicKey;
+use lazy_static::lazy_static;
 use pod_common::{Crypto, Message, NetworkTrait, PodError, Transaction, Vote};
 use prometheus::{Gauge, Registry};
-use lazy_static::lazy_static;
 use std::collections::{HashMap, HashSet};
-use ed25519_dalek::VerifyingKey as PublicKey;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::info;
 
 lazy_static! {
     static ref REGISTRY: Registry = Registry::new();
-    static ref REPLICA_LOG_SIZE: Gauge = Gauge::new("replica_log_size", "Size of replica log").unwrap();
+    static ref REPLICA_LOG_SIZE: Gauge =
+        Gauge::new("replica_log_size", "Size of replica log").unwrap();
 }
 
 pub fn init_metrics() {
-    REGISTRY.register(Box::new(REPLICA_LOG_SIZE.clone())).unwrap();
+    REGISTRY
+        .register(Box::new(REPLICA_LOG_SIZE.clone()))
+        .unwrap();
 }
 
 pub struct Replica {
@@ -25,7 +28,7 @@ pub struct Replica {
 
 struct ReplicaState {
     sequence_number: u64,
-    log: HashMap<Vec<u8>, Vote>, 
+    log: HashMap<Vec<u8>, Vote>,
     clients: HashSet<PublicKey>,
 }
 
@@ -47,12 +50,15 @@ impl Replica {
 
     pub async fn run(&self, address: &str) -> Result<(), PodError> {
         self.network.listen(address).await?;
-        let mut rx = self.network.receive().await;
-        while let Some(message) = rx.recv().await {
+        let mut rx = self.network.subscribe();
+        while let Ok(message) = rx.recv().await {
             match message {
                 Message::Connect => {
-                    info!("Replica {} received CONNECT", hex::encode(self.id.as_bytes()));
-                    self.state.lock().await.clients.insert(self.id); // Simplified client tracking
+                    info!(
+                        "Replica {} received CONNECT",
+                        hex::encode(self.id.to_bytes())
+                    );
+                    self.state.lock().await.clients.insert(self.id.clone());
                     self.broadcast_log().await?;
                 }
                 Message::Write(tx) => {
@@ -73,7 +79,6 @@ impl Replica {
         let timestamp = self.current_round();
         let sn = state.sequence_number;
         state.sequence_number += 1;
-
 
         let message = bincode::encode_to_vec(&(&tx, timestamp, sn), bincode::config::standard())
             .map_err(|e| PodError::NetworkError(e.to_string()))?;
