@@ -4,7 +4,10 @@ use async_trait::async_trait;
 use ed25519_dalek::VerifyingKey as PublicKey;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
-use tokio::{net::TcpStream, sync::mpsc};
+use tokio::{
+    net::TcpStream,
+    sync::{broadcast, mpsc},
+};
 use tokio_tungstenite::{tungstenite, WebSocketStream};
 use tracing::warn;
 
@@ -16,20 +19,19 @@ pub trait NetworkTrait: Send + Sync {
         message: Message,
     ) -> Result<(), PodError>;
     async fn broadcast(&self, message: Message) -> Result<(), PodError>;
-    // async fn receive(&self) -> mpsc::Receiver<Message>;
+    fn subscribe(&self) -> broadcast::Receiver<Message>;
     async fn listen(&self, address: &str) -> Result<(), PodError>;
 }
 
 pub struct Network {
-    tx: mpsc::Sender<Message>,
-    rx: mpsc::Receiver<Message>,
+    tx: broadcast::Sender<Message>,
     peers: HashMap<PublicKey, String>,
 }
 
 impl Network {
     pub fn new(peers: HashMap<PublicKey, String>) -> Self {
-        let (tx, rx) = mpsc::channel(1000);
-        Self { tx, rx, peers }
+        let (tx, _) = broadcast::channel(1000);
+        Self { tx, peers }
     }
 
     async fn send_message(&self, addr: &str, message: Message) -> Result<(), PodError> {
@@ -69,9 +71,9 @@ impl NetworkTrait for Network {
         Ok(())
     }
 
-    // async fn receive(&self) -> mpsc::Receiver<Message> {
-    //     self.rx.clone()
-    // }
+    fn subscribe(&self) -> broadcast::Receiver<Message> {
+        self.tx.subscribe()
+    }
 
     async fn listen(&self, address: &str) -> Result<(), PodError> {
         let listener = tokio::net::TcpListener::bind(address)
@@ -93,12 +95,15 @@ impl NetworkTrait for Network {
     }
 }
 
-async fn handle_connection(mut ws_stream: WebSocketStream<TcpStream>, tx: mpsc::Sender<Message>) {
+async fn handle_connection(
+    mut ws_stream: WebSocketStream<TcpStream>,
+    tx: broadcast::Sender<Message>,
+) {
     while let Some(Ok(msg)) = ws_stream.next().await {
         if let tungstenite::Message::Binary(data) = msg {
             match bincode::decode_from_slice(&data, bincode::config::standard()) {
                 Ok((message, _)) => {
-                    if tx.send(message).await.is_err() {
+                    if tx.send(message).is_err() {
                         tracing::error!("Failed to send message to channel");
                         break;
                     }

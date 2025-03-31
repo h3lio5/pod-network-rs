@@ -32,7 +32,7 @@ impl Crypto {
         public_key: &PublicKey,
     ) -> Result<(), PodError> {
         public_key
-            .verify(message, signature)
+            .verify(message, &signature)
             .map_err(|_| PodError::InvalidSignature)
     }
 
