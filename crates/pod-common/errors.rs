@@ -12,4 +12,6 @@ pub enum PodError {
     ConfigError(String),
     #[error("Protocol violation: {0}")]
     ProtocolViolation(String),
+    #[error("Invalid configuration")]
+    InvalidConfig,
 }

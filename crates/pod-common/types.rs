@@ -5,12 +5,12 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct Transaction {
-    pub id: Vec<u8>,
+    pub id: [u8; 32],
     pub content: Vec<u8>,
     pub sender: Vec<u8>,
 }
 
-pub type TransactionId = Vec<u8>;
+pub type TransactionId = [u8; 32];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TransactionStatus {

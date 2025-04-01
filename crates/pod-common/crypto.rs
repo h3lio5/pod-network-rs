@@ -39,7 +39,7 @@ impl Crypto {
     pub fn generate_tx(&self, content: Vec<u8>) -> Transaction {
         let mut hasher = Sha256::new();
         hasher.update(&content);
-        let id = hasher.finalize().to_vec();
+        let id: [u8; 32] = hasher.finalize().into();
         Transaction {
             id,
             content,
