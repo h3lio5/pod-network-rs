@@ -100,6 +100,7 @@ impl Client {
 
     pub async fn write(&self, content: Vec<u8>) -> Result<TransactionId, PodError> {
         let tx = self.crypto.generate_tx(content);
+        // If tx was already processed, don't broadcast it to the replicas and return early.
         if self.state.lock().await.tx_status.contains_key(&tx.id) {
             return Ok(tx.id);
         }
@@ -148,15 +149,18 @@ impl Client {
         Ok(pod)
     }
 
+    // Handle an incoming vote from a replica
     async fn handle_vote(&self, vote: Vote) -> Result<(), PodError> {
         let mut state = self.state.lock().await;
-        let replica_id = vote.replica_id.clone();
+        let replica_id = vote.replica_id;
+
+        // Serialize vote data for signature verification
         let message = bincode::encode_to_vec(
             &(&vote.tx, vote.timestamp, vote.sequence_number),
             bincode::config::standard(),
         )
-        .map_err(|e| PodError::NetworkError(e.to_string()))?;
-
+        .map_err(|e| PodError::SerializationError(e.to_string()))?;
+    
         // Convert raw bytes Signature and Replica ID into concrete Signature and PublicKey types
         let signature = Signature::from_slice(&vote.signature)
             .map_err(|e| PodError::SerializationError(e.to_string()))?;
@@ -168,35 +172,61 @@ impl Client {
             })?;
         let replica_id = PublicKey::from_bytes(&replica_id_fixed_bytes)
             .map_err(|e| PodError::SerializationError(e.to_string()))?;
-
+        // Verify vote signature
         self.crypto.verify(&message, &signature, &replica_id)?;
 
-        let expected_sn = state.next_sn.get(&replica_id).unwrap_or(&0);
-        if vote.sequence_number != *expected_sn {
-            warn!("Out-of-order vote from replica {:?}", replica_id);
+        // Check sequence number
+        let expected_sn = state.next_sn.get(&replica_id).map_or(0, |v| *v);
+        if vote.sequence_number != expected_sn {
+            warn!(
+                "Out-of-order vote from replica {:?}: sn={} expected={}",
+                replica_id, vote.sequence_number, expected_sn
+            );
+            state
+                .backlog
+                .entry(replica_id)
+                .or_default()
+                .push_back(vote.clone());
+            drop(state);
+            self.process_backlog(replica_id).await?;
             return Ok(());
         }
-        state
-            .next_sn
-            .insert(replica_id.clone(), vote.sequence_number + 1);
+        // Update sequence number
+        state.next_sn.insert(replica_id, vote.sequence_number + 1);
 
-        let mrt = state.mrt.get(&replica_id).unwrap_or(&0);
-        if vote.timestamp < *mrt {
-            return Err(PodError::ProtocolViolation("Old timestamp".to_string()));
-        }
-        state.mrt.insert(replica_id.clone(), vote.timestamp);
-
-        let tx_votes = state
-            .tsps
-            .entry(vote.tx.clone())
-            .or_insert_with(HashMap::new);
-        if tx_votes.contains_key(&replica_id) && tx_votes[&replica_id] != vote.timestamp {
+        // Check timestamp monotonicity
+        let mrt = state.mrt.get(&replica_id).map_or(0, |v| *v);
+        if vote.timestamp < mrt {
             return Err(PodError::ProtocolViolation(
                 "Duplicate timestamp".to_string(),
+                format!("Replica ID: {{hex::encode(vote.replica_id)}}"),
             ));
         }
-        tx_votes.insert(replica_id, vote.timestamp);
-        state.pod.auxiliary_data.push(vote);
+        state.mrt.insert(replica_id, vote.timestamp);
+
+        // Store vote and timestamp if the transaction is NOT a heartbeat message
+        if let Some(tx) = vote.tx {
+            let tx_votes = state.votes.entry(tx).or_default();
+            if tx_votes.contains_key(&replica_id)
+                && tx_votes[&replica_id].timestamp != vote.timestamp
+            {
+                return Err(PodError::ProtocolViolation(
+                    "Duplicate timestamp".to_string(),
+                    format!("Replica ID: {{hex::encode(vote.replica_id)}}"),
+                ));
+            }
+            tx_votes.insert(replica_id, vote.clone());
+            state
+                .tsps
+                .entry(tx)
+                .or_default()
+                .insert(replica_id, vote.timestamp);
+            state.pod.auxiliary_data.push(vote);
+        }
+        // release the lock
+        drop(state);
+        // process eligible votes from the backlog
+        self.process_backlog(replica_id).await?;
         Ok(())
     }
 
