@@ -10,9 +10,10 @@ pub struct Transaction {
     pub sender: Vec<u8>,
 }
 
+pub type TransactionId = Vec<u8>;
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct Vote {
-    pub tx: Transaction,
+    pub tx: Option<Transaction>,
     pub timestamp: u64,
     pub sequence_number: u64,
     pub signature: Vec<u8>,
