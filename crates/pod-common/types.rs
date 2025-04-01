@@ -11,6 +11,12 @@ pub struct Transaction {
 }
 
 pub type TransactionId = Vec<u8>;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TransactionStatus {
+    Pending,
+    Confirmed { r_conf: u64 },
+}
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct Vote {
     pub tx: Option<Transaction>,
