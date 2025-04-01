@@ -1,11 +1,12 @@
+use dashmap::DashMap;
 use ed25519_dalek::{Signature, VerifyingKey as PublicKey};
 use lazy_static::lazy_static;
 use pod_common::{
-    Crypto, Message, Network, NetworkTrait, Pod, PodError, Transaction, TransactionData, TransactionId, TransactionStatus, Vote
+    Crypto, Message, Network, NetworkTrait, Pod, PodError, Transaction, TransactionData,
+    TransactionId, TransactionStatus, Vote,
 };
 use prometheus::{Counter, Registry};
 use std::collections::{HashMap, VecDeque};
-use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -97,11 +98,20 @@ impl Client {
         Ok(())
     }
 
-    pub async fn write(&self, content: Vec<u8>) -> Result<(), PodError> {
+    pub async fn write(&self, content: Vec<u8>) -> Result<TransactionId, PodError> {
         let tx = self.crypto.generate_tx(content);
-        self.network.broadcast(Message::Write(tx)).await?;
+        if self.state.lock().await.tx_status.contains_key(&tx.id) {
+            return Ok(tx.id);
+        }
+        self.network.broadcast(Message::Write(tx.clone())).await?;
+        self.state
+            .lock()
+            .await
+            .tx_status
+            .insert(tx.id.clone(), TransactionStatus::Pending);
         TX_WRITTEN.inc();
-        Ok(())
+        info!("Wrote transaction {:?}", tx.id);
+        Ok(tx.id)
     }
 
     pub async fn read(&self) -> Result<Pod, PodError> {
