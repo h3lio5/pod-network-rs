@@ -25,8 +25,17 @@ impl Crypto {
         self.signing_key.sign(message)
     }
 
+    pub fn replica_pubkey_from_bytes(bytes: &[u8]) -> Result<PublicKey, PodError> {
+        let replica_id = PublicKey::from_bytes(&bytes.try_into().map_err(|_| {
+            PodError::SerializationError("Failed to deserialize public key".to_string())
+        })?)
+        .map_err(|_| {
+            PodError::SerializationError("Failed to deserialize public key".to_string())
+        })?;
+        Ok(replica_id)
+    }
+
     pub fn verify(
-        &self,
         message: &[u8],
         signature: &Signature,
         public_key: &PublicKey,
