@@ -4,10 +4,8 @@ use async_trait::async_trait;
 use ed25519_dalek::VerifyingKey as PublicKey;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
-use tokio::{
-    net::TcpStream,
-    sync::{broadcast, mpsc},
-};
+use std::sync::Arc;
+use tokio::{net::TcpStream, sync::broadcast};
 use tokio_tungstenite::{tungstenite, WebSocketStream};
 use tracing::warn;
 
@@ -21,6 +19,7 @@ pub trait NetworkTrait: Send + Sync {
     async fn broadcast(&self, message: Message) -> Result<(), PodError>;
     fn subscribe(&self) -> broadcast::Receiver<Message>;
     async fn listen(&self, address: &str) -> Result<(), PodError>;
+    fn replicas(&self) -> Vec<PublicKey>;
 }
 
 pub struct Network {
@@ -92,6 +91,10 @@ impl NetworkTrait for Network {
         });
         tracing::info!("WebSocket server listening on {}", address);
         Ok(())
+    }
+
+    fn replicas(&self) -> Vec<PublicKey> {
+        self.peers.keys().cloned().collect()
     }
 }
 
