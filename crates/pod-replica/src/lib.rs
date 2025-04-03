@@ -7,6 +7,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
+pub mod network;
+
 lazy_static! {
     static ref REGISTRY: Registry = Registry::new();
     static ref REPLICA_LOG_SIZE: Gauge =
@@ -57,9 +59,10 @@ impl Replica {
             match message {
                 Message::Connect => self.handle_connect().await?,
                 Message::Write(tx) => self.handle_write(tx).await?,
-                Message::Vote(vote) => {
+                Message::Vote(_) => {
                     warn!("Replica received unexpected vote message");
                 }
+                Message::Heartbeat => self.handle_heartbeat_request().await?,
             }
         }
         Ok(())
@@ -72,6 +75,7 @@ impl Replica {
             hex::encode(self.id.to_bytes())
         );
         self.state.lock().await.clients.insert(self.id);
+
         self.broadcast_log().await
     }
 
@@ -89,7 +93,7 @@ impl Replica {
         let sn = state.sequence_number;
         state.sequence_number += 1;
 
-        let vote = self.create_vote(&tx, timestamp, sn)?;
+        let vote = self.create_vote(Some(&tx), timestamp, sn)?;
 
         // Update state and broadcast
         state.log.insert(tx.id, vote.clone());
@@ -99,14 +103,32 @@ impl Replica {
         Ok(())
     }
 
+    async fn handle_heartbeat_request(&self) -> Result<(), PodError> {
+        let mut state = self.state.lock().await;
+        // create a heartbeat vote
+        let timestamp = self.current_round();
+        let sn = state.sequence_number;
+        state.sequence_number += 1;
+
+        let vote = self.create_vote(None, timestamp, sn)?;
+
+        self.network.broadcast(Message::Vote(vote)).await?;
+        Ok(())
+    }
+
     /// Creates a signed vote for a transaction.
-    fn create_vote(&self, tx: &Transaction, timestamp: u64, sn: u64) -> Result<Vote, PodError> {
+    fn create_vote(
+        &self,
+        tx: Option<&Transaction>,
+        timestamp: u64,
+        sn: u64,
+    ) -> Result<Vote, PodError> {
         let message = bincode::encode_to_vec(&(tx, timestamp, sn), bincode::config::standard())
             .map_err(|e| PodError::NetworkError(e.to_string()))?;
 
         let signature = self.crypto.sign(&message).to_vec();
         Ok(Vote {
-            tx: Some(tx.clone()),
+            tx: tx.map(|t| t.clone()),
             timestamp,
             sequence_number: sn,
             signature,

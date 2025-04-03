@@ -1,5 +1,5 @@
 use clap::Parser;
-use pod_common::Network;
+use pod_replica::network::ReplicaNetwork;
 use pod_replica::Replica;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -24,9 +24,7 @@ async fn main() {
     let args = Args::parse();
 
     // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .init();
+    tracing_subscriber::fmt().with_env_filter("info").init();
 
     // Parse seed from hex string
     let seed = match hex::decode(&args.seed) {
@@ -46,7 +44,7 @@ async fn main() {
     };
 
     // Create network
-    let network = Arc::new(Box::new(Network::new(None)) as Box<dyn pod_common::NetworkTrait>);
+    let network = Arc::new(Box::new(ReplicaNetwork::new()) as Box<dyn pod_common::NetworkTrait>);
 
     // Create and run replica
     match Replica::new(network, &seed) {
@@ -60,4 +58,4 @@ async fn main() {
             error!("Failed to create replica: {}", e);
         }
     }
-} 
+}
