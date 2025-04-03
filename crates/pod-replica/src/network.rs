@@ -1,3 +1,4 @@
+use futures_util::stream::StreamExt;
 use pod_common::{
     handle_connection, send_message_to_peer, Message, NetworkTrait, PodError, WsSink,
 };
@@ -7,8 +8,7 @@ use tokio::{
     sync::{broadcast, RwLock},
     time::Duration,
 };
-use tokio_tungstenite::accept_async;
-use futures_util::stream::StreamExt;
+use tokio_tungstenite::{accept_async, MaybeTlsStream};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -17,6 +17,12 @@ pub struct ReplicaNetwork {
     tx: broadcast::Sender<Message>,
     peers: Arc<RwLock<HashMap<Uuid, WsSink>>>,
     heartbeat_interval: Duration,
+}
+
+impl Default for ReplicaNetwork {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ReplicaNetwork {
@@ -80,6 +86,7 @@ impl NetworkTrait for ReplicaNetwork {
 
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
+                let stream = MaybeTlsStream::Plain(stream);
                 let tx = tx.clone();
                 let peers = peers.clone();
                 tokio::spawn(async move {
