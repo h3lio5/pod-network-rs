@@ -1,5 +1,6 @@
 # pod-network-rs
-Implementation of the Pod network in Rust.
+Implementation of the paper [Pod: An Optimal-Latency, Censorship-Free,
+and Accountable Generalized Consensus Layer](https://arxiv.org/pdf/2501.14931) in Rust.
 
 ## How Pod Network Works
 Pod Network operates with two core components:
