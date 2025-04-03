@@ -74,16 +74,13 @@ impl Client {
         })
     }
 
-    pub async fn run(
-        &mut self,
-        address: &str,
-        replicas: Vec<(PublicKey, String)>,
-    ) -> Result<(), PodError> {
+    pub async fn run(&mut self, address: &str) -> Result<(), PodError> {
         self.network.listen(address).await?;
         let mut rx = self.network.subscribe();
-        for (replica, _) in &replicas {
-            self.state.lock().await.mrt.insert(replica.clone(), 0);
-            self.state.lock().await.next_sn.insert(replica.clone(), 0);
+        // broadcast a Connect message to all the peers
+        for replica in self.network.replicas() {
+            self.state.lock().await.mrt.insert(replica, 0);
+            self.state.lock().await.next_sn.insert(replica, 0);
             self.network
                 .send_to_replica(replica.clone(), Message::Connect)
                 .await?;
@@ -120,7 +117,7 @@ impl Client {
             .tx_status
             .get(&tx_id)
             .map(|status| status.value().clone())
-            .ok_or(PodError::UnknownTransaction(hex::encode(tx_id)))       
+            .ok_or(PodError::UnknownTransaction(hex::encode(tx_id)))
     }
     /// Read the current pod state efficiently
     pub async fn read(&self) -> Result<Pod, PodError> {

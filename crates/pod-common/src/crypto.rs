@@ -9,7 +9,7 @@ pub struct Crypto {
 
 impl Crypto {
     pub fn from_secret_key(secret_key: &[u8; 32]) -> Result<Self, PodError> {
-        let signing_key = SigningKey::from_bytes(&secret_key);
+        let signing_key = SigningKey::from_bytes(secret_key);
         let public_key = signing_key.verifying_key();
         Ok(Crypto {
             public_key,
@@ -32,7 +32,7 @@ impl Crypto {
         public_key: &PublicKey,
     ) -> Result<(), PodError> {
         public_key
-            .verify(message, &signature)
+            .verify(message, signature)
             .map_err(|_| PodError::InvalidSignature)
     }
 

@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use ed25519_dalek::VerifyingKey as PublicKey;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::{net::TcpStream, sync::broadcast};
 use tokio_tungstenite::{tungstenite, WebSocketStream};
 use tracing::warn;

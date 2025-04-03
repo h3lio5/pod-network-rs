@@ -1,8 +1,3 @@
-use serde::{Deserialize, Serialize};
-
-pub mod client;
-pub use client::*;
-
 pub mod crypto;
 pub use crypto::*;
 

@@ -1,5 +1,4 @@
 use bincode::{Decode, Encode};
-use ed25519_dalek::{Signature, VerifyingKey as PublicKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
