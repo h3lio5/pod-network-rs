@@ -12,3 +12,6 @@ The project is divided into Replica and Client code.
 ### Replica
 - maintain point-to-point connection with the client after the client sends a 'connection request'. Additionally, unicast the replication log (at the time of connection request) to the client.
 - round / view change messages must also be sent to the clients.
+
+### Further Improvements
+- Only Replicas are identified by their `PublicKey` in the current impl, but pod-client nodes could also be given `PublicKey`. 
