@@ -4,6 +4,7 @@ use pod_replica::Replica;
 use std::sync::Arc;
 use tracing::{error, info};
 use tracing_subscriber;
+use hex;
 
 /// Command line arguments for the replica
 #[derive(Parser, Debug)]

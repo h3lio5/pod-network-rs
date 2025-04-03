@@ -19,6 +19,14 @@ struct Args {
     /// Path to the YAML configuration file
     #[arg(short, long)]
     config: String,
+
+    /// Threshold for confirmation
+    #[arg(short, long)]
+    alpha: usize,
+
+    /// Byzantine fault tolerance threshold
+    #[arg(short, long)]
+    beta: usize,
 }
 
 // Replica configuration as represented in the YAML file.
@@ -54,11 +62,10 @@ async fn main() {
         replicas.insert(pub_key, entry.url);
     }
 
-    // Prepare the set of replica endpoints (public key, URL pairs)
     let network = Arc::new(ClientNetwork::new());
     let seed = [0u8; 32];
     let client =
-        Arc::new(Client::new(network.clone(), 5, 1, &seed).expect("Failed to create client"));
+        Arc::new(Client::new(network.clone(), args.alpha, args.beta, &seed).expect("Failed to create client"));
 
     // Spawn the client runtime that connects to replicas and processes incoming messages.
     let client_runner = client.clone();
