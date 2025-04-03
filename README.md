@@ -11,8 +11,8 @@ Gathers votes from replicas and confirms transactions once a quorum (α) is achi
 Tracks the pod state (T), including confirmed transactions and the past-perfect round (r_perf).
 
 2. `pod-replica`:
-Listens for client requests (e.g., <WRITE tx>, <CONNECT>).
-Responds with signed votes, including timestamps (ts) and sequence numbers (sn) for ordering.
+Listens for client requests (e.g., WriteTx, Connect).
+Responds with signed votes, including timestamps (ts) and sequence numbers (sn) for ordering. Also periodically sends Heartbeat messages to its connected clients.
 
 
 ## Key Terms
