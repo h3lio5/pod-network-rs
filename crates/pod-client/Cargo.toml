@@ -20,3 +20,7 @@ hex = "0.4.3"
 serde = "1"
 axum = "0.8.3"
 async-trait = "0.1"
+tokio-tungstenite = "0.26.2"
+futures-util = "0.3"
+clap = { version = "4.0", features = ["derive"] }
+serde_yaml = "0.9"

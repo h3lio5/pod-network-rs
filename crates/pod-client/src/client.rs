@@ -2,7 +2,7 @@ use dashmap::DashMap;
 use ed25519_dalek::{Signature, VerifyingKey as PublicKey};
 use lazy_static::lazy_static;
 use pod_common::{
-    Crypto, Message, NetworkTrait, Pod, PodError, Transaction, TransactionData, TransactionId,
+    Crypto, Message, PeerId, Pod, PodError, Transaction, TransactionData, TransactionId,
     TransactionStatus, Vote,
 };
 use prometheus::{Counter, Registry};
@@ -24,14 +24,7 @@ pub fn init_metrics() {
     REGISTRY.register(Box::new(TX_CONFIRMED.clone())).unwrap();
 }
 
-pub struct Client {
-    crypto: Crypto,
-    network: Arc<Box<dyn NetworkTrait>>,
-    state: Arc<Mutex<ClientState>>,
-    alpha: usize,
-    beta: usize,
-}
-
+/// Client state that is shared (with appropriate locks) across tasks.
 struct ClientState {
     mrt: DashMap<PublicKey, u64>,     // Most recent timestamps per replica
     next_sn: DashMap<PublicKey, u64>, // Next expected sequence numbers
@@ -41,9 +34,18 @@ struct ClientState {
     pod: Pod,                         // Cached pod state
 }
 
+/// The client that uses a network to connect to replicas and process messages.
+pub struct Client {
+    crypto: Crypto,
+    network: Arc<crate::network::ClientNetwork>,
+    state: Arc<Mutex<ClientState>>,
+    alpha: usize,
+    beta: usize,
+}
+
 impl Client {
     pub fn new(
-        network: Arc<Box<dyn NetworkTrait>>,
+        network: Arc<crate::network::ClientNetwork>,
         alpha: usize,
         beta: usize,
         seed: &[u8; 32],
@@ -74,17 +76,25 @@ impl Client {
         })
     }
 
-    pub async fn run(&mut self, address: &str) -> Result<(), PodError> {
-        self.network.listen(address).await?;
-        let mut rx = self.network.subscribe();
-        // broadcast a Connect message to all the peers
-        for replica in self.network.replicas() {
-            self.state.lock().await.mrt.insert(replica, 0);
-            self.state.lock().await.next_sn.insert(replica, 0);
+    /// Connects to replicas (provided as (PublicKey, URL) pairs) and spawns tasks to handle incoming messages.
+    pub async fn run(&self, replicas: HashMap<PublicKey, String>) -> Result<(), PodError> {
+        // For each replica, connect and initialize state.
+        for (replica_pk, replica_url) in replicas.into_iter() {
+            {
+                let state = self.state.lock().await;
+                state.mrt.insert(replica_pk, 0);
+                state.next_sn.insert(replica_pk, 0);
+            }
             self.network
-                .send_to_replica(replica.clone(), Message::Connect)
+                .connect_to_replica(replica_pk, replica_url)
+                .await?;
+            self.network
+                .send_to_replica(replica_pk, Message::Connect)
                 .await?;
         }
+
+        // Listen for broadcast messages and handle votes.
+        let mut rx = self.network.subscribe();
         while let Ok(message) = rx.recv().await {
             if let Message::Vote(vote) = message {
                 self.handle_vote(vote).await?;
@@ -95,60 +105,49 @@ impl Client {
 
     pub async fn write(&self, content: Vec<u8>) -> Result<TransactionId, PodError> {
         let tx = self.crypto.generate_tx(content);
-        if self.state.lock().await.tx_status.contains_key(&tx.id) {
+        let state = self.state.lock().await;
+        if state.tx_status.contains_key(&tx.id) {
             return Ok(tx.id);
         }
         self.network.broadcast(Message::Write(tx.clone())).await?;
-        self.state
-            .lock()
-            .await
-            .tx_status
-            .insert(tx.id.clone(), TransactionStatus::Pending);
+        state.tx_status.insert(tx.id, TransactionStatus::Pending);
         TX_WRITTEN.inc();
         info!("Wrote transaction {:?}", tx.id);
         Ok(tx.id)
     }
 
-    /// Get the transaction status
+    /// Get the transaction status.
     pub async fn get_tx_status(&self, tx_id: TransactionId) -> Result<TransactionStatus, PodError> {
-        self.state
-            .lock()
-            .await
+        let state = self.state.lock().await;
+        state
             .tx_status
             .get(&tx_id)
             .map(|status| status.value().clone())
             .ok_or(PodError::UnknownTransaction(hex::encode(tx_id)))
     }
-    /// Read the current pod state efficiently
+
+    /// Read the current pod state.
     pub async fn read(&self) -> Result<Pod, PodError> {
         let state = self.state.lock().await;
-        Ok(state.pod.clone()) // O(1) lock + O(n) clone
+        Ok(state.pod.clone())
     }
 
-    /// Handle an incoming vote from a replica
-    async fn handle_vote(&mut self, vote: Vote) -> Result<(), PodError> {
+    /// Handle an incoming vote from a replica.
+    async fn handle_vote(&self, vote: Vote) -> Result<(), PodError> {
         let mut state = self.state.lock().await;
 
-        // Verify vote signature
+        // Verify vote signature.
         let message = bincode::encode_to_vec(
-            &(&vote.tx, vote.timestamp, vote.sequence_number),
+            (&vote.tx, vote.timestamp, vote.sequence_number),
             bincode::config::standard(),
         )
         .map_err(|e| PodError::SerializationError(e.to_string()))?;
-
         let signature = Signature::from_slice(&vote.signature)
             .map_err(|e| PodError::SerializationError(e.to_string()))?;
+        let replica_id = PeerId::raw_replica_pubkey_from_bytes(&vote.replica_id)?;
+        Crypto::verify(&message, &signature, &replica_id)?;
 
-        let replica_id =
-            PublicKey::from_bytes(&vote.replica_id.clone().try_into().map_err(|_| {
-                PodError::SerializationError("Failed to deserialize public key".to_string())
-            })?)
-            .map_err(|_| {
-                PodError::SerializationError("Failed to deserialize public key".to_string())
-            })?;
-        self.crypto.verify(&message, &signature, &replica_id)?;
-
-        // Check sequence number and handle backlog
+        // Check sequence number and handle backlog.
         let expected_sn = state.next_sn.get(&replica_id).map_or(0, |v| *v);
         if vote.sequence_number != expected_sn {
             warn!(
@@ -163,16 +162,16 @@ impl Client {
             return Ok(());
         }
 
-        // Apply the vote
-        Self::apply_vote(&mut state, vote, replica_id, self.alpha, self.beta)?;
+        // Apply the vote.
+        Self::apply_vote(&mut state, vote.clone(), replica_id, self.alpha, self.beta)?;
 
-        // Process backlog
+        // Process backlog.
         loop {
             let mut backlog = state.backlog.entry(replica_id).or_default();
             let expected_sn = state.next_sn.get(&replica_id).map_or(0, |v| *v);
-            if let Some((next_sn, _)) = backlog.first_key_value() {
-                if *next_sn == expected_sn {
-                    let vote = backlog.pop_first().unwrap().1;
+            if let Some((&next_sn, _)) = backlog.iter().next() {
+                if next_sn == expected_sn {
+                    let vote = backlog.remove(&next_sn).unwrap();
                     drop(backlog);
                     Self::apply_vote(&mut state, vote, replica_id, self.alpha, self.beta)?;
                 } else {
@@ -186,7 +185,7 @@ impl Client {
         Ok(())
     }
 
-    /// Apply a vote and update pod incrementally
+    /// Apply a vote and update pod incrementally.
     fn apply_vote(
         state: &mut MutexGuard<ClientState>,
         vote: Vote,
@@ -194,9 +193,7 @@ impl Client {
         alpha: usize,
         beta: usize,
     ) -> Result<(), PodError> {
-        // Update sequence number and check timestamp monotonicity
         state.next_sn.insert(replica_id, vote.sequence_number + 1);
-
         let mrt = state.mrt.get(&replica_id).map_or(0, |v| *v);
         if vote.timestamp < mrt {
             return Err(PodError::ProtocolViolation(
@@ -206,12 +203,8 @@ impl Client {
         }
         state.mrt.insert(replica_id, vote.timestamp);
 
-        // Handle transaction if present
         if let Some(tx) = vote.tx.clone() {
-            // Process transaction votes
             let mut tx_votes = state.votes.entry(tx.clone()).or_default();
-
-            // Check for duplicate timestamp
             if tx_votes.contains_key(&replica_id)
                 && tx_votes[&replica_id].timestamp != vote.timestamp
             {
@@ -220,24 +213,15 @@ impl Client {
                     format!("ReplicaID: {}", hex::encode(replica_id.to_bytes())),
                 ));
             }
-
-            // Add vote to transaction votes
             tx_votes.insert(replica_id, vote.clone());
-
-            // Process quorum if reached
             if tx_votes.len() >= alpha {
                 let timestamps: Vec<u64> = tx_votes.values().map(|v| v.timestamp).collect();
                 let r_min = Self::min_possible_ts(&timestamps, alpha, beta)?;
                 let r_max = Self::max_possible_ts(&timestamps, alpha, beta)?;
                 let r_conf = Self::median(&timestamps);
                 let votes: Vec<Vote> = tx_votes.values().cloned().collect();
-                let tx_id = tx.id.clone();
-                let tx_for_log = tx.clone();
-
-                // Drop tx_votes before state modifications
+                let tx_id = tx.id;
                 drop(tx_votes);
-
-                // Update state with confirmed transaction
                 state.pod.auxiliary_data.push(vote);
                 state
                     .tx_status
@@ -251,26 +235,17 @@ impl Client {
                         votes,
                     },
                 );
-
                 TX_CONFIRMED.inc();
-                info!(
-                    "Confirmed transaction {:?} at round {}",
-                    tx_for_log.id, r_conf
-                );
+                info!("Confirmed transaction {:?} at round {}", tx_id, r_conf);
             } else {
-                // Drop tx_votes before state modification to stop the borrow checker from yelling!
                 drop(tx_votes);
                 state.pod.auxiliary_data.push(vote);
             }
         }
-
-        // Update past-perfect round
         state.pod.past_perfect_round = Self::compute_r_perf(&state.mrt, alpha, beta)?;
-
         Ok(())
     }
 
-    /// Compute r_min
     fn min_possible_ts(timestamps: &[u64], alpha: usize, beta: usize) -> Result<u64, PodError> {
         let mut ts = timestamps.to_vec();
         while ts.len() < alpha {
@@ -280,7 +255,6 @@ impl Client {
         Ok(ts[alpha / 2 - beta])
     }
 
-    /// Compute r_max
     fn max_possible_ts(timestamps: &[u64], alpha: usize, beta: usize) -> Result<u64, PodError> {
         let mut ts = timestamps.to_vec();
         while ts.len() < alpha {
@@ -290,7 +264,6 @@ impl Client {
         Ok(ts[ts.len() - alpha + alpha / 2 + beta])
     }
 
-    /// Compute r_perf
     fn compute_r_perf(
         mrt: &DashMap<PublicKey, u64>,
         alpha: usize,
@@ -304,7 +277,6 @@ impl Client {
         Ok(mrt_vals[alpha / 2 - beta])
     }
 
-    /// Compute median for r_conf
     fn median(timestamps: &[u64]) -> u64 {
         let mut sorted = timestamps.to_vec();
         sorted.sort_unstable();
