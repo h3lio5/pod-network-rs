@@ -2,8 +2,8 @@ use dashmap::DashMap;
 use ed25519_dalek::{Signature, VerifyingKey as PublicKey};
 use lazy_static::lazy_static;
 use pod_common::{
-    Crypto, Message, PeerId, Pod, PodError, Transaction, TransactionData, TransactionId,
-    TransactionStatus, Vote,
+    Crypto, Message, Pod, PodError, Transaction, TransactionData, TransactionId, TransactionStatus,
+    Vote,
 };
 use prometheus::{Counter, Registry};
 use std::collections::{BTreeMap, HashMap};
@@ -144,7 +144,7 @@ impl Client {
         .map_err(|e| PodError::SerializationError(e.to_string()))?;
         let signature = Signature::from_slice(&vote.signature)
             .map_err(|e| PodError::SerializationError(e.to_string()))?;
-        let replica_id = PeerId::raw_replica_pubkey_from_bytes(&vote.replica_id)?;
+        let replica_id = Crypto::replica_pubkey_from_bytes(&vote.replica_id)?;
         Crypto::verify(&message, &signature, &replica_id)?;
 
         // Check sequence number and handle backlog.

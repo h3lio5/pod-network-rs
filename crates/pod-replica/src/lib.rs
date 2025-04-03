@@ -74,6 +74,7 @@ impl Replica {
             "Replica {} received CONNECT",
             hex::encode(self.id.to_bytes())
         );
+
         self.state.lock().await.clients.insert(self.id);
 
         self.broadcast_log().await
@@ -123,12 +124,12 @@ impl Replica {
         timestamp: u64,
         sn: u64,
     ) -> Result<Vote, PodError> {
-        let message = bincode::encode_to_vec(&(tx, timestamp, sn), bincode::config::standard())
+        let message = bincode::encode_to_vec((tx, timestamp, sn), bincode::config::standard())
             .map_err(|e| PodError::NetworkError(e.to_string()))?;
 
         let signature = self.crypto.sign(&message).to_vec();
         Ok(Vote {
-            tx: tx.map(|t| t.clone()),
+            tx: tx.cloned(),
             timestamp,
             sequence_number: sn,
             signature,

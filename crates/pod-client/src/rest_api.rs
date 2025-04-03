@@ -1,8 +1,8 @@
+use crate::client::*;
 use axum::{extract::State, Json};
 use pod_common::{Pod, TransactionId, TransactionStatus};
 use serde::Deserialize;
 use std::sync::Arc;
-use crate::client::*;
 
 #[derive(Deserialize)]
 pub struct WriteRequest {
@@ -18,7 +18,11 @@ pub async fn write_tx(
     State(client): State<Arc<Client>>,
     Json(req): Json<WriteRequest>,
 ) -> Result<Json<TransactionId>, String> {
-    client.write(req.content).await.map(Json).map_err(|e| e.to_string())
+    client
+        .write(req.content)
+        .await
+        .map(Json)
+        .map_err(|e| e.to_string())
 }
 
 pub async fn read_pod(State(client): State<Arc<Client>>) -> Result<Json<Pod>, String> {
@@ -29,7 +33,11 @@ pub async fn get_tx_status(
     State(client): State<Arc<Client>>,
     Json(req): Json<TxStatusRequest>,
 ) -> Result<Json<TransactionStatus>, String> {
-    client.get_tx_status(req.tx_id).await.map(Json).map_err(|e| e.to_string())
+    client
+        .get_tx_status(req.tx_id)
+        .await
+        .map(Json)
+        .map_err(|e| e.to_string())
 }
 
 pub async fn metrics() -> String {
