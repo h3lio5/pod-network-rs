@@ -16,4 +16,6 @@ pub enum PodError {
     InvalidConfig,
     #[error("Unknown transaction with ID: {0}")]
     UnknownTransaction(String),
+    #[error("Acquiring lock error: {0}")]
+    AcquiringLockError(String),
 }
